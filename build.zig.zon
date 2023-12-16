@@ -1,0 +1,11 @@
+.{
+    .name = "zig-i18n",
+    .version = "0.0.0",
+    .dependencies = .{
+    },
+    .paths = .{
+        "src/",
+        "build.zig",
+        "build.zig.zon",
+    },
+}
