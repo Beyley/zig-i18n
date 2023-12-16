@@ -117,10 +117,20 @@ pub fn main() !void {
         \\
         \\current_language: LanguageCode = .@"{s}",
         \\
-        \\pub fn getString(self: Self, string: LocalizationKey) []const u8 {{
+        \\pub fn getString(self: Self, comptime string: LocalizationKey) []const u8 {{
         \\    return switch(self.current_language) {{
         \\{s}
         \\    }};
+        \\}}
+        \\
+        \\pub fn format(self: Self, writer: anytype, comptime string: LocalizationKey, comptime args: anytype) !void {{
+        \\    switch(self.current_language) {{
+        \\        inline else => |code| {{
+        \\            const i18n = Self{{.current_language = code}};
+        \\
+        \\            try std.fmt.format(writer, comptime i18n.getString(string), args);
+        \\        }}
+        \\    }} 
         \\}}
     , .{
         blk: {

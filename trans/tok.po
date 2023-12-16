@@ -1,2 +1,5 @@
 msgid greeting
 msgstr toki!
+
+msgid format
+msgstr tenpo ni la sina nimi li jan {s}

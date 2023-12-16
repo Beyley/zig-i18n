@@ -92,6 +92,8 @@ fn setupI18NModule(
         .root_source_file = .{ .path = "src/gen.zig" },
     });
 
+    // b.installArtifact(generator);
+
     var run_step = b.addRunArtifact(generator);
     run_step.addFileArg(.{ .path = language_names_index_path });
     const generated_file = run_step.addOutputFileArg("i18n.zig");

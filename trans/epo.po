@@ -1,2 +1,5 @@
 msgid greeting
 msgstr Saluton!
+
+msgid format
+msgstr Via nomo nun esatas {s}.

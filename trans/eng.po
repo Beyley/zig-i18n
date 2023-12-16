@@ -1,2 +1,5 @@
 msgid greeting
 msgstr Hello!
+
+msgid format
+msgstr Your name is now {s}.
