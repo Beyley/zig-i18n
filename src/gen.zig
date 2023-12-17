@@ -10,11 +10,14 @@ pub fn main() !void {
     defer std.process.argsFree(allocator, args);
 
     const language_names_index_path = args[1];
-    const output_path = args[2];
-    const default_language = args[3];
+    const code_set_path = args[2];
+    const output_path = args[3];
+    const default_language = args[4];
 
     const language_names_index_file = try std.fs.openFileAbsolute(language_names_index_path, .{});
     defer language_names_index_file.close();
+    const code_set_file = try std.fs.openFileAbsolute(code_set_path, .{});
+    defer code_set_file.close();
     const output_file = try std.fs.createFileAbsolute(output_path, .{});
     defer output_file.close();
 
@@ -26,9 +29,10 @@ pub fn main() !void {
     var reader = buffered_reader.reader();
 
     var buf: [1024]u8 = undefined;
+    _ = try reader.readUntilDelimiterOrEof(&buf, '\n');
     while (try reader.readUntilDelimiterOrEof(&buf, '\n')) |read| {
         //Trim the newlines from the end
-        const line = std.mem.trimRight(u8, read, "\r\n");
+        const line = std.mem.trimRight(u8, read, " \r\n");
 
         var iter = std.mem.splitAny(u8, line, "\t");
 
@@ -36,10 +40,45 @@ pub fn main() !void {
         try language_codes.put(try allocator.dupe(u8, iter.next() orelse unreachable), try allocator.dupe(u8, iter.next() orelse unreachable));
     }
 
+    var iso_639_2_map = std.StringHashMap([]const u8).init(allocator);
+    defer iso_639_2_map.deinit();
+
+    var iso_639_1_map = std.StringHashMap([]const u8).init(allocator);
+    defer iso_639_1_map.deinit();
+
+    buffered_reader = std.io.bufferedReader(code_set_file.reader());
+    reader = buffered_reader.reader();
+
+    _ = try reader.readUntilDelimiterOrEof(&buf, '\n');
+    while (try reader.readUntilDelimiterOrEof(&buf, '\n')) |read| {
+        const line = std.mem.trimRight(u8, read, " \r\n");
+
+        var iter = std.mem.splitAny(u8, line, "\t");
+
+        const iso_639_3 = iter.next() orelse return error.TableFormattedWrong;
+        const iso_639_2_b = iter.next() orelse return error.TableFormattedWrong;
+        const iso_639_2_t = iter.next() orelse return error.TableFormattedWrong;
+        const iso_639_1 = iter.next() orelse return error.TableFormattedWrong;
+
+        if (iso_639_1.len > 0) {
+            try iso_639_1_map.put(try allocator.dupe(u8, iso_639_1), try allocator.dupe(u8, iso_639_3));
+        }
+
+        if (iso_639_2_b.len > 0) {
+            try iso_639_2_map.put(try allocator.dupe(u8, iso_639_2_b), try allocator.dupe(u8, iso_639_3));
+        }
+
+        if (iso_639_2_t.len > 0) {
+            if (iso_639_2_map.get(iso_639_2_t) != null) continue;
+
+            try iso_639_2_map.put(try allocator.dupe(u8, iso_639_2_t), try allocator.dupe(u8, iso_639_3));
+        }
+    }
+
     var localizations = std.StringHashMap(std.StringHashMap([]const u8)).init(allocator);
     defer localizations.deinit();
 
-    var i: usize = 4;
+    var i: usize = 5;
     while (i < args.len) : (i += 2) {
         const code = args[i];
         const path = args[i + 1];
@@ -98,6 +137,8 @@ pub fn main() !void {
     try std.fmt.format(writer,
         \\const std = @import("std");
         \\
+        \\const Locale = @import("locale");
+        \\
         \\pub const LanguageCode = enum {{
         \\{s}
         \\
@@ -106,6 +147,18 @@ pub fn main() !void {
         \\    return switch(self) {{
         \\    {s}
         \\    }};
+        \\    }}
+        \\
+        \\    pub fn fromIso639_1(code: []const u8) ?LanguageCode {{
+        \\{s}
+        \\
+        \\        return null;
+        \\    }}
+        \\
+        \\    pub fn fromIso639_2(code: []const u8) ?LanguageCode {{
+        \\{s}
+        \\
+        \\        return null;
         \\    }}
         \\}};
         \\
@@ -116,6 +169,19 @@ pub fn main() !void {
         \\const Self = @This();
         \\
         \\current_language: LanguageCode = .@"{s}",
+        \\
+        \\pub fn detectSystemLocale(self: *Self, allocator: std.mem.Allocator) !void {{
+        \\    if(try Locale.getCurrentLocale(allocator)) |locale| {{
+        \\        defer allocator.free(locale);
+        \\        const found_locale = LanguageCode.fromIso639_1(locale) 
+        \\            orelse LanguageCode.fromIso639_2(locale) 
+        \\            orelse std.meta.stringToEnum(LanguageCode, locale) 
+        \\            orelse return;
+        \\
+        \\        self.current_language = found_locale;
+        \\
+        \\    }}
+        \\}}
         \\
         \\pub fn getString(self: Self, comptime string: LocalizationKey) []const u8 {{
         \\    return switch(self.current_language) {{
@@ -130,7 +196,7 @@ pub fn main() !void {
         \\
         \\            try std.fmt.format(writer, comptime i18n.getString(string), args);
         \\        }}
-        \\    }} 
+        \\    }}
         \\}}
     , .{
         blk: {
@@ -154,6 +220,46 @@ pub fn main() !void {
                         \\    .@"{s}" => "{s}",
                         \\
                     , .{ entry.key_ptr.*, entry.value_ptr.* });
+            }
+            break :blk try array_list.toOwnedSlice();
+        },
+        blk: {
+            var array_list = std.ArrayList(u8).init(allocator);
+            var iter = iso_639_1_map.iterator();
+            var first = true;
+            while (iter.next()) |entry| {
+                //Skip languages which dont have localizations
+                if (localizations.get(entry.value_ptr.*) == null) continue;
+                try std.fmt.format(array_list.writer(),
+                    \\        {s}if(std.mem.eql(u8, code, "{s}")) {{
+                    \\            return .@"{s}";
+                    \\        }}
+                , .{
+                    if (first) "" else "else ",
+                    entry.key_ptr.*,
+                    entry.value_ptr.*,
+                });
+                first = false;
+            }
+            break :blk try array_list.toOwnedSlice();
+        },
+        blk: {
+            var array_list = std.ArrayList(u8).init(allocator);
+            var iter = iso_639_2_map.iterator();
+            var first = true;
+            while (iter.next()) |entry| {
+                //Skip languages which dont have localizations
+                if (localizations.get(entry.value_ptr.*) == null) continue;
+                try std.fmt.format(array_list.writer(),
+                    \\        {s}if(std.mem.eql(u8, code, "{s}")) {{
+                    \\            return .@"{s}";
+                    \\        }}
+                , .{
+                    if (first) "" else "else ",
+                    entry.key_ptr.*,
+                    entry.value_ptr.*,
+                });
+                first = false;
             }
             break :blk try array_list.toOwnedSlice();
         },

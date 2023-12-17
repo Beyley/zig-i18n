@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const code_set_url = "https://iso639-3.sil.org/sites/iso639-3/files/downloads/iso-639-3.tab";
 const language_names_index_url = "https://iso639-3.sil.org/sites/iso639-3/files/downloads/iso-639-3_Name_Index.tab";
 
 pub fn build(b: *std.Build) !void {
@@ -31,6 +32,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
+    exe.linkLibC();
     exe.addModule("i18n", mod);
 
     b.installArtifact(exe);
@@ -60,6 +62,7 @@ fn setupI18NModule(
         path: []const u8,
     },
 ) !*std.build.Module {
+    const code_set_path = try b.cache_root.join(b.allocator, &.{"iso-639-3.tab"});
     const language_names_index_path = try b.cache_root.join(b.allocator, &.{"iso-639-3-language-names-index.tab"});
 
     var client = std.http.Client{
@@ -87,6 +90,26 @@ fn setupI18NModule(
     };
     defer language_names_index_file.close();
 
+    const code_set_file = std.fs.openFileAbsolute(code_set_path, .{}) catch |err| blk: {
+        if (err == std.fs.File.OpenError.FileNotFound) {
+            const f = try std.fs.createFileAbsolute(code_set_path, .{ .read = true });
+
+            var res = try client.fetch(b.allocator, .{
+                .location = .{ .url = code_set_url },
+            });
+            defer res.deinit();
+
+            try f.writeAll(res.body.?);
+
+            try f.seekTo(0);
+
+            break :blk f;
+        }
+
+        return err;
+    };
+    defer code_set_file.close();
+
     const generator = b.addExecutable(.{
         .name = "i18n-gen",
         .root_source_file = .{ .path = "src/gen.zig" },
@@ -96,6 +119,7 @@ fn setupI18NModule(
 
     var run_step = b.addRunArtifact(generator);
     run_step.addFileArg(.{ .path = language_names_index_path });
+    run_step.addFileArg(.{ .path = code_set_path });
     const generated_file = run_step.addOutputFileArg("i18n.zig");
     run_step.addArg(default_language);
     for (localization_files) |localization_file| {
@@ -103,7 +127,14 @@ fn setupI18NModule(
         run_step.addFileArg(.{ .path = localization_file.path });
     }
 
-    const module = b.createModule(.{ .source_file = generated_file });
+    const locale_module = b.createModule(.{ .source_file = .{ .path = "src/locale.zig" } });
+
+    const module = b.createModule(
+        .{
+            .source_file = generated_file,
+            .dependencies = &.{.{ .name = "locale", .module = locale_module }},
+        },
+    );
 
     return module;
 }
